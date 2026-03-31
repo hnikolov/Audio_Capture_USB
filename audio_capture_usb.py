@@ -50,6 +50,7 @@ METER_HEIGHT = 16
 audio_buf_lock = threading.Lock()
 audio_buf = np.zeros(DEFAULT_BLOCK_SIZE, dtype=np.float32)
 peak_level = 0.0
+rms_level = 0.0
 
 rec_queue: queue.Queue[np.ndarray] = queue.Queue()
 rec_active = False
@@ -58,7 +59,7 @@ rec_gain = 1.0
 
 # ── Audio callback ────────────────────────────────────────────────────────────
 def audio_callback(indata, frames, time_info, status):
-    global audio_buf, peak_level
+    global audio_buf, peak_level, rms_level
     if status:
         print(f"[sounddevice] {status}")
     data = indata.copy()
@@ -66,6 +67,7 @@ def audio_callback(indata, frames, time_info, status):
     with audio_buf_lock:
         audio_buf = mono.copy()
         peak_level = float(np.max(np.abs(mono)))
+        rms_level = float(np.sqrt(np.mean(mono ** 2)))
     if rec_active:
         rec_queue.put((data * rec_gain).copy())
 
@@ -169,14 +171,24 @@ class AudioCaptureApp:
         self.status_label.pack(side=tk.LEFT, padx=12)
 
         meter_row = ttk.Frame(lvl_frame)
-        meter_row.pack(fill=tk.X, pady=4)
-        ttk.Label(meter_row, text="Level").pack(side=tk.LEFT)
+        meter_row.pack(fill=tk.X, pady=2)
+        ttk.Label(meter_row, text="Peak", width=5).pack(side=tk.LEFT)
         self.meter_canvas = tk.Canvas(meter_row, width=METER_WIDTH, height=METER_HEIGHT,
                                       bg="#e0e0e0", highlightthickness=0)
         self.meter_canvas.pack(side=tk.LEFT, padx=8)
         self.meter_bar = self.meter_canvas.create_rectangle(0, 0, 0, METER_HEIGHT, fill="#28a745")
         self.db_label = ttk.Label(meter_row, text="-∞ dB", width=10, font=("Consolas", 9))
         self.db_label.pack(side=tk.LEFT)
+
+        rms_row = ttk.Frame(lvl_frame)
+        rms_row.pack(fill=tk.X, pady=2)
+        ttk.Label(rms_row, text="RMS", width=5).pack(side=tk.LEFT)
+        self.rms_canvas = tk.Canvas(rms_row, width=METER_WIDTH, height=METER_HEIGHT,
+                                    bg="#e0e0e0", highlightthickness=0)
+        self.rms_canvas.pack(side=tk.LEFT, padx=8)
+        self.rms_bar = self.rms_canvas.create_rectangle(0, 0, 0, METER_HEIGHT, fill="#17a2b8")
+        self.rms_db_label = ttk.Label(rms_row, text="-∞ dB", width=10, font=("Consolas", 9))
+        self.rms_db_label.pack(side=tk.LEFT)
 
         self.waveform_canvas = tk.Canvas(lvl_frame, width=WAVEFORM_WIDTH,
                                          height=WAVEFORM_HEIGHT, bg="#1a1a2e",
@@ -448,6 +460,7 @@ class AudioCaptureApp:
             with audio_buf_lock:
                 buf = audio_buf.copy()
                 pk = peak_level
+                rms = rms_level
 
             buf = buf * self.gain
 
@@ -457,6 +470,7 @@ class AudioCaptureApp:
                 ss = int(elapsed) % 60
                 self.rec_timer_label.configure(text=f"{mm:02d}:{ss:02d}")
 
+            # Peak meter
             pk = pk * self.gain
             db = 20 * np.log10(pk) if pk > 0 else -np.inf
             pct = max(0.0, min(1.0, (db + 60) / 60))
@@ -472,6 +486,29 @@ class AudioCaptureApp:
             self.db_label.configure(
                 text=f"{db:.1f} dB" if np.isfinite(db) else "-∞ dB"
             )
+
+            # RMS meter
+            rms = rms * self.gain
+            rms_db = 20 * np.log10(rms) if rms > 0 else -np.inf
+            rms_pct = max(0.0, min(1.0, (rms_db + 60) / 60))
+            rms_bar_w = int(rms_pct * METER_WIDTH)
+            self.rms_canvas.coords(self.rms_bar, 0, 0, rms_bar_w, METER_HEIGHT)
+            # Color by loudness zone: quiet→cyan, good→green, hot→yellow, clip→red
+            if rms_db < -40:
+                rms_color = "#6c757d"   # gray — too quiet
+            elif rms_db < -20:
+                rms_color = "#17a2b8"   # cyan — quiet but usable
+            elif rms_db < -6:
+                rms_color = "#28a745"   # green — ideal range
+            elif rms_db < -3:
+                rms_color = "#ffc107"   # yellow — hot
+            else:
+                rms_color = "#dc3545"   # red — clipping risk
+            self.rms_canvas.itemconfig(self.rms_bar, fill=rms_color)
+            self.rms_db_label.configure(
+                text=f"{rms_db:.1f} dB" if np.isfinite(rms_db) else "-∞ dB"
+            )
+
             self._draw_waveform(buf)
 
         self.root.after(33, self._tick)
