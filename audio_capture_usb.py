@@ -190,6 +190,32 @@ class AudioCaptureApp:
         self.rms_db_label = ttk.Label(rms_row, text="-∞ dB", width=10, font=("Consolas", 9))
         self.rms_db_label.pack(side=tk.LEFT)
 
+        # Crest factor = Peak / RMS (in dB).  Indicates transient content.
+        # Typical crest factors by signal type:
+        #   Clean electric guitar :  8–15 dB  (very dynamic, sharp pick attacks)
+        #   Distorted guitar      :  3–6  dB  (compression from clipping)
+        #   Bass guitar            :  8–12 dB  (pluck transients)
+        #   Drums / percussion     : 15–25 dB  (extreme transients)
+        #   Vocals (dynamic)       : 10–18 dB
+        #   Pop / rock master      :  6–10 dB  (moderate loudness war)
+        #   Metal master (loud)    :  3–6  dB  (heavily limited / brickwalled)
+        #   Classical / jazz       : 15–25 dB  (wide dynamic range)
+        #   Sine wave              :  3.0  dB  (theoretical minimum for continuous)
+        #
+        # For a guitar input signal being captured:
+        #   < 6  dB → heavily compressed / clipping — reduce gain or check signal
+        #   6–15 dB → normal clean-to-crunch guitar range (green)
+        #   > 15 dB → very dynamic / percussive playing or quiet signal with noise floor
+        crest_row = ttk.Frame(lvl_frame)
+        crest_row.pack(fill=tk.X, pady=2)
+        ttk.Label(crest_row, text="Crest", width=5).pack(side=tk.LEFT)
+        self.crest_canvas = tk.Canvas(crest_row, width=METER_WIDTH, height=METER_HEIGHT,
+                                      bg="#e0e0e0", highlightthickness=0)
+        self.crest_canvas.pack(side=tk.LEFT, padx=8)
+        self.crest_bar = self.crest_canvas.create_rectangle(0, 0, 0, METER_HEIGHT, fill="#17a2b8")
+        self.crest_label = ttk.Label(crest_row, text="— dB", width=10, font=("Consolas", 9))
+        self.crest_label.pack(side=tk.LEFT)
+
         self.waveform_canvas = tk.Canvas(lvl_frame, width=WAVEFORM_WIDTH,
                                          height=WAVEFORM_HEIGHT, bg="#1a1a2e",
                                          highlightthickness=0)
@@ -507,6 +533,34 @@ class AudioCaptureApp:
             self.rms_canvas.itemconfig(self.rms_bar, fill=rms_color)
             self.rms_db_label.configure(
                 text=f"{rms_db:.1f} dB" if np.isfinite(rms_db) else "-∞ dB"
+            )
+
+            # Crest factor (Peak-to-RMS ratio in dB)
+            if np.isfinite(db) and np.isfinite(rms_db) and rms_db > -60:
+                crest_db = db - rms_db
+            else:
+                crest_db = 0.0
+            # Visualize on a 0–30 dB scale (covers most real signals)
+            crest_pct = max(0.0, min(1.0, crest_db / 30.0))
+            crest_bar_w = int(crest_pct * METER_WIDTH)
+            self.crest_canvas.coords(self.crest_bar, 0, 0, crest_bar_w, METER_HEIGHT)
+            # Color tuned for guitar input:
+            #   < 3 dB  — red:    near-square-wave, hard clipping or broken signal
+            #   3–6 dB  — yellow: heavily compressed / distorted guitar
+            #   6–15 dB — green:  normal clean-to-crunch guitar range
+            #   > 15 dB — cyan:   very dynamic / percussive attacks or noise floor
+            if crest_db < 3:
+                crest_color = "#dc3545"   # red — abnormally flat / clipping
+            elif crest_db < 6:
+                crest_color = "#ffc107"   # yellow — heavy compression
+            elif crest_db < 15:
+                crest_color = "#28a745"   # green — healthy guitar dynamics
+            else:
+                crest_color = "#17a2b8"   # cyan — very dynamic / percussive
+            self.crest_canvas.itemconfig(self.crest_bar, fill=crest_color)
+            self.crest_label.configure(
+                text=f"{crest_db:.1f} dB" if (np.isfinite(db) and np.isfinite(rms_db)
+                                               and rms_db > -60) else "— dB"
             )
 
             self._draw_waveform(buf)
